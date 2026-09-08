@@ -1,0 +1,26 @@
+/*
+  Paste into Grist HOST custom.css (e.g. /home/fede/grist-style/custom.css).
+  This is outside the widget iframe. The widget cannot change these rules itself
+  because the iframe is cross-origin.
+
+  Grist CustomView.css gives iframe.custom_view { flex: auto } with no width:100%
+  or min-width:0. Browsers then keep the iframe at the default replaced-element
+  size (~300x150) and the section shows a corner + scrollbar.
+*/
+.custom_view_container,
+.custom_view_content {
+  min-width: 0 !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+iframe.custom_view {
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  flex: 1 1 0 !important;
+  display: block !important;
+}

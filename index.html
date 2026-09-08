@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Grist Image Preview Widget</title>
+  <style>
+    :root {
+      --fg: #1f2937;
+      --muted: #6b7280;
+      --border: #d1d5db;
+      --panel: #f9fafb;
+      --preview-bg: #111827;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      position: fixed;
+      inset: 0;
+      overflow: hidden;
+      font-family: Inter, Segoe UI, Arial, sans-serif;
+      color: var(--fg);
+      background: var(--preview-bg);
+    }
+    .app {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+    }
+    .panel {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: min(280px, calc(100% - 48px));
+      z-index: 5;
+      border-right: 1px solid var(--border);
+      background: var(--panel);
+      display: flex;
+      flex-direction: column;
+      color: #111827;
+      box-shadow: 8px 0 24px rgba(0, 0, 0, 0.18);
+    }
+    .app.settings-hidden .panel { display: none; }
+    .panel-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      padding: 12px;
+    }
+    h1 { font-size: 16px; margin: 0 0 10px; }
+    .field { margin-bottom: 8px; }
+    .field label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    select, input[type="color"] {
+      width: 100%;
+      padding: 7px 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #fff;
+      font-size: 12px;
+    }
+    input[type="color"] { height: 34px; padding: 2px; }
+    .hint { font-size: 11px; color: var(--muted); }
+    .main {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--preview-bg);
+      overflow: hidden;
+    }
+    .preview-stage {
+      flex: 1 1 auto;
+      min-height: 0;
+      position: relative;
+      overflow: hidden;
+      user-select: none;
+    }
+    .preview-fill {
+      position: absolute;
+      inset: 0;
+      background-repeat: no-repeat;
+      background-position: left top;
+      background-size: contain;
+      display: none;
+    }
+    .preview-fill.is-cover { background-size: cover; }
+    .preview-fill.pos-left-top { background-position: left top; }
+    .preview-fill.pos-center-top { background-position: center top; }
+    .preview-fill.pos-right-top { background-position: right top; }
+    .preview-fill.pos-left-center { background-position: left center; }
+    .preview-fill.pos-center-center { background-position: center center; }
+    .preview-fill.pos-right-center { background-position: right center; }
+    .preview-fill.pos-left-bottom { background-position: left bottom; }
+    .preview-fill.pos-center-bottom { background-position: center bottom; }
+    .preview-fill.pos-right-bottom { background-position: right bottom; }
+    .preview-fill.visible { display: block; }
+    .preview-fill.is-linked { cursor: pointer; }
+    .preview-image {
+      position: absolute;
+      width: 0;
+      height: 0;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .empty {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #d1d5db;
+      font-size: 13px;
+      text-align: center;
+      padding: 16px;
+    }
+    .empty[hidden] { display: none !important; }
+    .thumbs {
+      flex-shrink: 0;
+      display: none;
+      gap: 6px;
+      padding: 8px;
+      overflow-x: auto;
+      background: rgba(0, 0, 0, 0.25);
+    }
+    .thumbs.visible { display: flex; }
+    .thumb {
+      width: 56px;
+      height: 56px;
+      object-fit: cover;
+      border-radius: 6px;
+      border: 2px solid transparent;
+      cursor: pointer;
+      background: #1f2937;
+      flex-shrink: 0;
+    }
+    .thumb.is-active { border-color: #60a5fa; }
+    .settings-toggle {
+      position: absolute;
+      left: 12px;
+      bottom: 12px;
+      z-index: 8;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.35);
+      color: #111827;
+      font-size: 18px;
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      border-radius: 999px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(2px);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s ease;
+    }
+    html:hover .settings-toggle,
+    .app:not(.settings-hidden) .settings-toggle {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    @media (max-width: 420px) {
+      .panel { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app settings-hidden">
+    <aside class="panel">
+      <div class="panel-body">
+        <h1>Image preview</h1>
+        <div class="field">
+          <label for="imageColumn">Image column</label>
+          <select id="imageColumn"></select>
+          <div class="hint">URL text or Attachment. Updates with the active row.</div>
+        </div>
+        <div class="field">
+          <label for="linkColumn">Link column</label>
+          <select id="linkColumn"></select>
+          <div class="hint">Double-click the image to open this URL in a new tab.</div>
+        </div>
+        <div class="field">
+          <label for="objectFit">Fit</label>
+          <select id="objectFit">
+            <option value="contain">Contain (whole image)</option>
+            <option value="cover">Cover (fill widget)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="objectPosition">Alignment</label>
+          <select id="objectPosition">
+            <option value="left top">Top left</option>
+            <option value="center top">Top center</option>
+            <option value="right top">Top right</option>
+            <option value="left center">Center left</option>
+            <option value="center center">Center</option>
+            <option value="right center">Center right</option>
+            <option value="left bottom">Bottom left</option>
+            <option value="center bottom">Bottom center</option>
+            <option value="right bottom">Bottom right</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="backgroundColor">Background</label>
+          <input id="backgroundColor" type="color" value="#111827" />
+        </div>
+      </div>
+    </aside>
+    <main class="main">
+      <div class="preview-stage">
+        <div id="previewFill" class="preview-fill" role="img" aria-label="Record image preview"></div>
+        <img id="previewImage" class="preview-image" alt="" />
+        <div id="emptyState" class="empty">Nessuna immagine da mostrare. Scegli una colonna con URL.</div>
+      </div>
+      <div id="thumbs" class="thumbs"></div>
+    </main>
+    <button id="settingsToggle" class="settings-toggle" type="button" title="Show settings" aria-label="Show settings">⚙</button>
+  </div>
+
+  <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+  <script>
+    (function () {
+      const LOCAL_OPTIONS_KEY = "grist-image-preview-widget:options:v1";
+      const DEMO_RECORD = {
+        id: 1,
+        Immagine: "https://picsum.photos/id/292/1200/800",
+        Extra: "https://picsum.photos/id/1080/800/800",
+        Link: "https://example.com"
+      };
+
+      const state = {
+        activeRecord: null,
+        columnsMeta: [],
+        images: [],
+        activeIndex: 0,
+        attachmentToken: null,
+        config: {
+          imageColumn: "",
+          linkColumn: "",
+          objectFit: "contain",
+          objectPosition: "left top",
+          backgroundColor: "#111827"
+        },
+        settingsVisible: false,
+        hasGrist: typeof window.grist !== "undefined",
+        isSavingOptions: false,
+        isApplyingRemoteOptions: false,
+        lastSavedOptionsJson: "",
+        lastAppliedOptionsJson: "",
+        optionsApiAvailable: true,
+        uiShellWired: false,
+        gristWireDone: false
+      };
+      state.isBuilderHost = window.location.pathname.includes("/grist-widget/custom-widget-builder/");
+
+      const els = {
+        app: document.querySelector(".app"),
+        imageColumn: document.getElementById("imageColumn"),
+        linkColumn: document.getElementById("linkColumn"),
+        objectFit: document.getElementById("objectFit"),
+        objectPosition: document.getElementById("objectPosition"),
+        backgroundColor: document.getElementById("backgroundColor"),
+        previewImage: document.getElementById("previewImage"),
+        previewFill: document.getElementById("previewFill"),
+        emptyState: document.getElementById("emptyState"),
+        thumbs: document.getElementById("thumbs"),
+        settingsToggle: document.getElementById("settingsToggle")
+      };
+
+      function escapeHtml(value) {
+        return String(value)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      function getRecordFieldObject(record) {
+        if (!record || typeof record !== "object") return {};
+        if (record.fields && typeof record.fields === "object" && !Array.isArray(record.fields)) {
+          return record.fields;
+        }
+        return record;
+      }
+
+      function getRecordValue(record, colId) {
+        if (!record || !colId) return undefined;
+        const fields = getRecordFieldObject(record);
+        if (Object.prototype.hasOwnProperty.call(fields, colId)) return fields[colId];
+        if (Object.prototype.hasOwnProperty.call(record, colId)) return record[colId];
+        return undefined;
+      }
+
+      function isHttpUrl(value) {
+        return typeof value === "string" && (/^https?:\/\//i.test(value.trim()) || value.trim().startsWith("data:image"));
+      }
+
+      function normalizeOpenableUrl(value) {
+        if (typeof value !== "string") return "";
+        const trimmed = value.trim();
+        try {
+          const parsed = new URL(trimmed);
+          if (parsed.protocol === "http:" || parsed.protocol === "https:") return parsed.href;
+        } catch (err) { /* ignore */ }
+        return "";
+      }
+
+      function splitUrlText(text) {
+        return String(text)
+          .split(/[\s,;]+/)
+          .map(function (s) { return s.trim(); })
+          .filter(isHttpUrl);
+      }
+
+      function extractLinkUrl(raw) {
+        if (raw === null || raw === undefined || raw === "") return "";
+        if (typeof raw === "string") {
+          const direct = normalizeOpenableUrl(raw);
+          if (direct) return direct;
+          const parts = String(raw).split(/[\s,;]+/);
+          for (let i = 0; i < parts.length; i++) {
+            const found = normalizeOpenableUrl(parts[i]);
+            if (found) return found;
+          }
+          return "";
+        }
+        if (Array.isArray(raw)) {
+          const start = raw[0] === "L" ? 1 : 0;
+          for (let i = start; i < raw.length; i++) {
+            const found = extractLinkUrl(raw[i]);
+            if (found) return found;
+          }
+          return "";
+        }
+        if (typeof raw === "object") {
+          if (typeof raw.url === "string") return extractLinkUrl(raw.url);
+          if (typeof raw.href === "string") return extractLinkUrl(raw.href);
+        }
+        return "";
+      }
+
+      function getConfiguredLinkUrl() {
+        const col = state.config.linkColumn;
+        if (!col || !state.activeRecord) return "";
+        return extractLinkUrl(getRecordValue(state.activeRecord, col));
+      }
+
+      function openUrlInNewTab(url) {
+        const opened = window.open(url, "_blank", "noopener,noreferrer");
+        if (opened) return;
+        const a = document.createElement("a");
+        a.href = url;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+
+      function openConfiguredLink() {
+        const url = getConfiguredLinkUrl();
+        if (!url) return;
+        openUrlInNewTab(url);
+      }
+
+      function updateLinkCursor() {
+        const hasLink = Boolean(getConfiguredLinkUrl()) && state.images.length > 0;
+        els.previewFill.classList.toggle("is-linked", hasLink);
+        els.previewFill.title = hasLink ? "Double-click to open link" : "";
+      }
+
+      function collectRawSources(raw, out) {
+        if (raw === null || raw === undefined || raw === "") return;
+        if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+          out.push({ kind: "attachment", id: raw });
+          return;
+        }
+        if (typeof raw === "string") {
+          const trimmed = raw.trim();
+          if (isHttpUrl(trimmed)) {
+            out.push({ kind: "url", src: trimmed });
+            return;
+          }
+          splitUrlText(trimmed).forEach(function (src) {
+            out.push({ kind: "url", src: src });
+          });
+          return;
+        }
+        if (Array.isArray(raw)) {
+          const start = raw[0] === "L" ? 1 : 0;
+          for (let i = start; i < raw.length; i++) collectRawSources(raw[i], out);
+          return;
+        }
+        if (typeof raw === "object") {
+          if (typeof raw.url === "string") {
+            collectRawSources(raw.url, out);
+            return;
+          }
+          if (raw.id != null) collectRawSources(raw.id, out);
+        }
+      }
+
+      async function ensureAttachmentToken() {
+        if (state.attachmentToken && state.attachmentToken.expiresAt > Date.now() + 15000) {
+          return state.attachmentToken;
+        }
+        if (!state.hasGrist || !window.grist || !grist.docApi || typeof grist.docApi.getAccessToken !== "function") {
+          return null;
+        }
+        const info = await grist.docApi.getAccessToken({ readOnly: true });
+        state.attachmentToken = {
+          baseUrl: info.baseUrl,
+          token: info.token,
+          expiresAt: Date.now() + ((info.ttlMsecs || 300000) - 5000)
+        };
+        return state.attachmentToken;
+      }
+
+      async function resolveImages(raw) {
+        const collected = [];
+        collectRawSources(raw, collected);
+        const images = [];
+        let token = null;
+        for (let i = 0; i < collected.length; i++) {
+          const item = collected[i];
+          if (item.kind === "url") {
+            images.push({ src: item.src, label: item.src });
+            continue;
+          }
+          if (!token) token = await ensureAttachmentToken();
+          if (!token) continue;
+          images.push({
+            src: token.baseUrl + "/attachments/" + item.id + "/download?auth=" + encodeURIComponent(token.token),
+            label: "attachment " + item.id
+          });
+        }
+        return images;
+      }
+
+      function buildMetaFromRecord(record) {
+        return Object.keys(getRecordFieldObject(record))
+          .filter(function (k) { return k !== "id" && k !== "fields" && !k.startsWith("_"); })
+          .map(function (id) { return { id: id, label: id, type: "" }; });
+      }
+
+      function normalizeMetaFromColumns(columns) {
+        if (!Array.isArray(columns)) return [];
+        return columns.map(function (col) {
+          const id = col.id || col.colId || col.name || col.label;
+          const label = col.label || col.name || col.colId || String(id);
+          return { id: String(id), label: String(label), type: col.type || "" };
+        }).filter(function (x) { return x.id && x.id !== "id"; });
+      }
+
+      function guessDefaults() {
+        if (state.config.imageColumn) return;
+        const hit = state.columnsMeta.find(function (c) {
+          return /image|img|foto|url|immagine|picture|photo|attach/i.test(c.id + c.label + c.type);
+        });
+        if (hit) state.config.imageColumn = hit.id;
+        else if (state.columnsMeta[0]) state.config.imageColumn = state.columnsMeta[0].id;
+      }
+
+      function columnOptionsHtml(selectedId) {
+        const cols = state.columnsMeta.slice().sort(function (a, b) {
+          return String(a.label).localeCompare(String(b.label));
+        });
+        let html = '<option value="">—</option>';
+        cols.forEach(function (m) {
+          const sel = String(m.id) === String(selectedId) ? " selected" : "";
+          html += '<option value="' + escapeHtml(m.id) + '"' + sel + ">" + escapeHtml(m.label) + "</option>";
+        });
+        return html;
+      }
+
+      const OBJECT_POSITIONS = [
+        "left top", "center top", "right top",
+        "left center", "center center", "right center",
+        "left bottom", "center bottom", "right bottom"
+      ];
+      const OBJECT_POSITION_CLASS = {
+        "left top": "pos-left-top",
+        "center top": "pos-center-top",
+        "right top": "pos-right-top",
+        "left center": "pos-left-center",
+        "center center": "pos-center-center",
+        "right center": "pos-right-center",
+        "left bottom": "pos-left-bottom",
+        "center bottom": "pos-center-bottom",
+        "right bottom": "pos-right-bottom"
+      };
+
+      function normalizeObjectPosition(value) {
+        return OBJECT_POSITIONS.indexOf(value) >= 0 ? value : "left top";
+      }
+
+      function syncSettingsInputs() {
+        els.imageColumn.innerHTML = columnOptionsHtml(state.config.imageColumn);
+        els.linkColumn.innerHTML = columnOptionsHtml(state.config.linkColumn);
+        els.objectFit.value = state.config.objectFit === "cover" ? "cover" : "contain";
+        els.objectPosition.value = normalizeObjectPosition(state.config.objectPosition);
+        els.backgroundColor.value = /^#[0-9a-fA-F]{6}$/.test(state.config.backgroundColor)
+          ? state.config.backgroundColor
+          : "#111827";
+        applyPreviewChrome();
+      }
+
+      function applyPreviewChrome() {
+        const bg = /^#[0-9a-fA-F]{6}$/.test(state.config.backgroundColor)
+          ? state.config.backgroundColor
+          : "#111827";
+        document.documentElement.style.setProperty("--preview-bg", bg);
+        els.previewFill.classList.toggle("is-cover", state.config.objectFit === "cover");
+        Object.keys(OBJECT_POSITION_CLASS).forEach(function (key) {
+          els.previewFill.classList.remove(OBJECT_POSITION_CLASS[key]);
+        });
+        const position = normalizeObjectPosition(state.config.objectPosition);
+        els.previewFill.classList.add(OBJECT_POSITION_CLASS[position]);
+      }
+
+      function buildSerializableConfig() {
+        return {
+          imageColumn: String(state.config.imageColumn || ""),
+          linkColumn: String(state.config.linkColumn || ""),
+          objectFit: state.config.objectFit === "cover" ? "cover" : "contain",
+          objectPosition: normalizeObjectPosition(state.config.objectPosition),
+          backgroundColor: /^#[0-9a-fA-F]{6}$/.test(state.config.backgroundColor)
+            ? state.config.backgroundColor
+            : "#111827"
+        };
+      }
+
+      function applyLoadedOptions(options) {
+        const incoming = (options && typeof options === "object") ? options : {};
+        const next = {
+          imageColumn: typeof incoming.imageColumn === "string" ? incoming.imageColumn : "",
+          linkColumn: typeof incoming.linkColumn === "string" ? incoming.linkColumn : "",
+          objectFit: incoming.objectFit === "cover" ? "cover" : "contain",
+          objectPosition: normalizeObjectPosition(incoming.objectPosition),
+          backgroundColor: typeof incoming.backgroundColor === "string" && /^#[0-9a-fA-F]{6}$/.test(incoming.backgroundColor)
+            ? incoming.backgroundColor
+            : "#111827"
+        };
+        const nextJson = JSON.stringify(next);
+        if (nextJson === state.lastAppliedOptionsJson) return;
+        state.isApplyingRemoteOptions = true;
+        state.config = next;
+        state.lastAppliedOptionsJson = nextJson;
+        syncSettingsInputs();
+        state.isApplyingRemoteOptions = false;
+      }
+
+      function loadLocalOptions() {
+        try {
+          const raw = window.localStorage.getItem(LOCAL_OPTIONS_KEY);
+          return raw ? JSON.parse(raw) : null;
+        } catch (err) {
+          return null;
+        }
+      }
+
+      function saveLocalOptions(payload) {
+        try { window.localStorage.setItem(LOCAL_OPTIONS_KEY, JSON.stringify(payload)); } catch (err) { /* ignore */ }
+      }
+
+      let saveTimer = null;
+      function persistOptions() {
+        if (state.isApplyingRemoteOptions) return;
+        const payload = buildSerializableConfig();
+        const payloadJson = JSON.stringify(payload);
+        if (payloadJson === state.lastSavedOptionsJson) return;
+        if (state.isBuilderHost) {
+          saveLocalOptions(payload);
+          state.lastSavedOptionsJson = payloadJson;
+          return;
+        }
+        if (!state.hasGrist || !window.grist || typeof grist.setOptions !== "function") return;
+        if (!state.optionsApiAvailable) return;
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(function () {
+          if (state.isSavingOptions) return;
+          state.isSavingOptions = true;
+          Promise.resolve(grist.setOptions(payload))
+            .then(function () { state.lastSavedOptionsJson = payloadJson; })
+            .catch(function (err) {
+              const msg = String(err && err.message ? err.message : err || "");
+              if (msg.toLowerCase().includes("unknown interface")) state.optionsApiAvailable = false;
+            })
+            .finally(function () { state.isSavingOptions = false; });
+        }, 300);
+      }
+
+      function cssUrl(src) {
+        return "url(" + JSON.stringify(src) + ")";
+      }
+
+      function showImage(index) {
+        if (!state.images.length) {
+          els.previewFill.classList.remove("visible");
+          els.previewFill.classList.remove("is-linked");
+          els.previewFill.title = "";
+          els.previewFill.style.backgroundImage = "";
+          els.previewImage.removeAttribute("src");
+          els.emptyState.hidden = false;
+          els.thumbs.classList.remove("visible");
+          els.thumbs.innerHTML = "";
+          return;
+        }
+        state.activeIndex = Math.max(0, Math.min(index, state.images.length - 1));
+        const item = state.images[state.activeIndex];
+        els.emptyState.hidden = true;
+        els.previewImage.src = item.src;
+        els.previewFill.style.backgroundImage = cssUrl(item.src);
+        els.previewFill.classList.add("visible");
+        applyPreviewChrome();
+        updateLinkCursor();
+        if (state.images.length < 2) {
+          els.thumbs.classList.remove("visible");
+          els.thumbs.innerHTML = "";
+          return;
+        }
+        els.thumbs.classList.add("visible");
+        els.thumbs.innerHTML = "";
+        state.images.forEach(function (img, i) {
+          const thumb = document.createElement("img");
+          thumb.className = "thumb" + (i === state.activeIndex ? " is-active" : "");
+          thumb.src = img.src;
+          thumb.alt = img.label;
+          thumb.addEventListener("click", function () { showImage(i); });
+          els.thumbs.appendChild(thumb);
+        });
+      }
+
+      async function renderPreview() {
+        applyPreviewChrome();
+        const col = state.config.imageColumn;
+        if (!state.activeRecord || !col) {
+          state.images = [];
+          showImage(0);
+          return;
+        }
+        try {
+          state.images = await resolveImages(getRecordValue(state.activeRecord, col));
+        } catch (err) {
+          state.images = [];
+        }
+        showImage(0);
+      }
+
+      function setSettingsVisible(visible) {
+        state.settingsVisible = visible;
+        els.app.classList.toggle("settings-hidden", !visible);
+        const title = visible ? "Hide settings" : "Show settings";
+        els.settingsToggle.title = title;
+        els.settingsToggle.setAttribute("aria-label", title);
+      }
+
+      function wireInputs() {
+        els.imageColumn.addEventListener("change", function () {
+          state.config.imageColumn = els.imageColumn.value;
+          persistOptions();
+          renderPreview();
+        });
+        els.linkColumn.addEventListener("change", function () {
+          state.config.linkColumn = els.linkColumn.value;
+          persistOptions();
+          updateLinkCursor();
+        });
+        els.previewFill.addEventListener("dblclick", function (e) {
+          if (!els.previewFill.classList.contains("visible")) return;
+          e.preventDefault();
+          openConfiguredLink();
+        });
+        els.objectFit.addEventListener("change", function () {
+          state.config.objectFit = els.objectFit.value === "cover" ? "cover" : "contain";
+          persistOptions();
+          applyPreviewChrome();
+        });
+        els.objectPosition.addEventListener("change", function () {
+          state.config.objectPosition = normalizeObjectPosition(els.objectPosition.value);
+          persistOptions();
+          applyPreviewChrome();
+        });
+        els.backgroundColor.addEventListener("input", function () {
+          state.config.backgroundColor = els.backgroundColor.value;
+          applyPreviewChrome();
+        });
+        els.backgroundColor.addEventListener("change", function () {
+          state.config.backgroundColor = els.backgroundColor.value;
+          persistOptions();
+        });
+        els.previewImage.addEventListener("error", function () {
+          if (!state.images.length) return;
+          els.emptyState.textContent = "Impossibile caricare l'immagine.";
+          els.emptyState.hidden = false;
+          els.previewFill.classList.remove("visible");
+          els.previewFill.classList.remove("is-linked");
+          els.previewFill.title = "";
+          els.previewFill.style.backgroundImage = "";
+        });
+        els.settingsToggle.addEventListener("click", function () {
+          setSettingsVisible(!state.settingsVisible);
+        });
+      }
+
+      async function tryLoadColumnsMeta() {
+        if (!state.hasGrist || !window.grist || !grist.docApi || typeof grist.docApi.fetchSelectedTable !== "function") return;
+        try {
+          const table = await grist.docApi.fetchSelectedTable();
+          const cols = table && table.columns ? table.columns : [];
+          if (cols.length) {
+            state.columnsMeta = normalizeMetaFromColumns(cols);
+            guessDefaults();
+            syncSettingsInputs();
+            persistOptions();
+          }
+        } catch (err) { /* ignore */ }
+      }
+
+      function adoptRecord(record) {
+        state.activeRecord = record || null;
+        if (state.activeRecord && !state.columnsMeta.length) {
+          state.columnsMeta = buildMetaFromRecord(state.activeRecord);
+          guessDefaults();
+          syncSettingsInputs();
+        }
+        renderPreview();
+      }
+
+      function wireGrist() {
+        if (!state.hasGrist || !window.grist) return;
+        if (state.gristWireDone) return;
+        try {
+          grist.ready({ requiredAccess: "full" });
+        } catch (err) {
+          return;
+        }
+        state.gristWireDone = true;
+        if (typeof grist.onOptions === "function" && !state.isBuilderHost) {
+          grist.onOptions(function (options) {
+            applyLoadedOptions(options || {});
+            renderPreview();
+          });
+        } else if (state.isBuilderHost) {
+          state.optionsApiAvailable = false;
+        }
+        if (typeof grist.onRecord === "function") {
+          grist.onRecord(function (record) {
+            adoptRecord(record);
+          });
+        }
+      }
+
+      async function init() {
+        if (state.isBuilderHost) {
+          state.optionsApiAvailable = false;
+          const localOptions = loadLocalOptions();
+          if (localOptions) applyLoadedOptions(localOptions);
+        }
+        if (!state.uiShellWired) {
+          wireInputs();
+          state.uiShellWired = true;
+        }
+        wireGrist();
+        await tryLoadColumnsMeta();
+        if (!state.hasGrist && !state.activeRecord) {
+          state.columnsMeta = buildMetaFromRecord(DEMO_RECORD);
+          guessDefaults();
+          if (!state.config.linkColumn) state.config.linkColumn = "Link";
+          syncSettingsInputs();
+          adoptRecord(DEMO_RECORD);
+        } else {
+          syncSettingsInputs();
+          renderPreview();
+        }
+      }
+
+      function waitForGristAndInit() {
+        const gristReady = window.grist && typeof window.grist.ready === "function";
+        if (gristReady) {
+          state.hasGrist = true;
+          init();
+          return;
+        }
+        state.hasGrist = false;
+        init();
+        let attempts = 0;
+        const timer = setInterval(function () {
+          attempts += 1;
+          if (window.grist && typeof window.grist.ready === "function") {
+            clearInterval(timer);
+            state.hasGrist = true;
+            init();
+            return;
+          }
+          if (attempts >= 40) clearInterval(timer);
+        }, 250);
+      }
+
+      waitForGristAndInit();
+    })();
+  </script>
+</body>
+</html>
